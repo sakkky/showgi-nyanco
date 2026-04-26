@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>王の御成 - Shogi Line Battle</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background-color: #f0f0f0; }
+        #game-container { margin: 0 auto; width: 450px; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        #header { display: flex; justify-content: space-between; margin-bottom: 10px; font-weight: bold; font-size: 18px;}
+        
+        /* 盤面 (9x9) */
+        #board { 
+            display: grid; 
+            grid-template-columns: repeat(9, 50px); 
+            grid-template-rows: repeat(9, 50px); 
+            gap: 1px; 
+            background-color: #333; 
+            border: 2px solid #333;
+        }
+        .cell { background-color: #eecfa1; position: relative; }
+        .cell.goal-line { background-color: #ffd700; opacity: 0.8; } /* 敵陣最奥 */
+        .cell.enemy-zone { background-color: #ffdab9; } /* 敵陣（上から3段）*/
+
+        /* 駒のデザイン */
+        .unit { 
+            width: 100%; height: 100%; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 14px; color: white; cursor: pointer;
+        }
+        .unit.player { background-color: #4169e1; clip-path: polygon(50% 0%, 100% 20%, 100% 100%, 0 100%, 0 20%); }
+        .unit.enemy { background-color: #dc143c; clip-path: polygon(0 0, 100% 0, 100% 80%, 50% 100%, 0 80%); }
+        .unit-hp { font-size: 10px; background: rgba(0,0,0,0.5); padding: 1px 3px; border-radius: 3px;}
+
+        /* 操作パネル */
+        #controls { margin-top: 15px; display: flex; gap: 10px; justify-content: center;}
+        button { padding: 10px 15px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; background-color: #4CAF50; color: white;}
+        button:disabled { background-color: #aaa; cursor: not-allowed; }
+        
+        #message { color: red; font-weight: bold; margin-top: 10px; height: 20px; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <h2>王の御成 (プロトタイプ)</h2>
+    <div id="header">
+        <span id="mana-display">マナ: 0 / 5</span>
+        <span id="turn-display">ターン: 0</span>
+    </div>
+
+    <div id="board"></div>
+
+    <div id="controls">
+        <button id="btn-pawn" onclick="selectUnitToSpawn('PAWN', 1)">歩 (コスト1)</button>
+        <button id="btn-king" onclick="selectUnitToSpawn('KING', 15)">王 (コスト15)</button>
+    </div>
+    <div id="message">盤面の一番下の列をクリックして配置！</div>
+</div>
+
+<script>
+    // --- ゲーム設定 ---
+    const BOARD_SIZE = 9;
+    let turn = 0;
+    let mana = 0;
+    let maxMana = 5;
+    let selectedUnitType = null;
+    let selectedUnitCost = 0;
+    let isGameOver = false;
+
+    // 駒のデータ管理
+    let units = [];
+
+    // --- 駒のステータス定義 ---
+    const UNIT_DATA = {
+        'PAWN': { name: '歩', hp: 1, atk: 1 },
+        'TOKIN': { name: 'と', hp: 5, atk: 1 }, // 歩の成り
+        'KING': { name: '王', hp: 10, atk: 2 }
+    };
+
+    const boardEl = document.getElementById('board');
+
+    // 盤面の初期化
+    function initBoard() {
+        boardEl.innerHTML = '';
+        for (let y = 0; y < BOARD_SIZE; y++) {
+            for (let x = 0; x < BOARD_SIZE; x++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                if (y === 0) cell.classList.add('goal-line');
+                if (y <= 2) cell.classList.add('enemy-zone');
+                
+                // 最下段をクリックした時の配置処理
+                cell.onclick = () => {
+                    if (selectedUnitType && y === BOARD_SIZE - 1 && mana >= selectedUnitCost) {
+                        // 既に駒がないか確認
+                        if (!units.some(u => u.x === x && u.y === y)) {
+                            spawnUnit('player', selectedUnitType, x, y);
+                            mana -= selectedUnitCost;
+                            selectedUnitType = null;
+                            document.getElementById('message').innerText = "";
+                            updateUI();
+                        }
+                    }
+                };
+                cell.id = `cell-${x}-${y}`;
+                boardEl.appendChild(cell);
+            }
+        }
+    }
+
+    // 駒の召喚
+    function spawnUnit(owner, type, x, y) {
+        units.push({
+            id: Math.random().toString(36).substr(2, 9),
+            owner: owner,
+            type: type,
+            x: x,
+            y: y,
+            hp: UNIT_DATA[type].hp,
+            atk: UNIT_DATA[type].atk,
+            maxHp: UNIT_DATA[type].hp
+        });
+    }
+
+    // 召喚ボタンの選択状態
+    function selectUnitToSpawn(type, cost) {
+        if (mana >= cost) {
+            selectedUnitType = type;
+            selectedUnitCost = cost;
+            document.getElementById('message').innerText = `${UNIT_DATA[type].name}を最下段に配置してください`;
+        }
+    }
+
+    // --- メインゲームループ (1ターン = 1秒) ---
+    function gameLoop() {
+        if (isGameOver) return;
+        turn++;
+
+        // マナの回復と上限解放 (10ターンごとに最大マナ+2)
+        if (turn % 10 === 0 && maxMana < 20) maxMana += 2;
+        if (mana < maxMana) mana++;
+
+        // 敵の自動召喚 (簡易AI: ランダムな列の最上段に敵の歩を出す)
+        if (turn % 4 === 0) {
+            const rx = Math.floor(Math.random() * BOARD_SIZE);
+            if (!units.some(u => u.x === rx && u.y === 0)) {
+                spawnUnit('enemy', 'PAWN', rx, 0);
+            }
+        }
+
+        // 駒の移動・戦闘処理
+        processUnits();
+
+        // 描画と勝敗判定
+        renderUnits();
+        checkWinCondition();
+        updateUI();
+    }
+
+    // 駒の処理 (前進、戦闘、連結ボーナス、成り)
+    function processUnits() {
+        // 配置順による有利不利をなくすため、一度位置をコピーして処理
+        let activeUnits = [...units];
+
+        activeUnits.forEach(unit => {
+            if (unit.hp <= 0) return; // 死亡済はスキップ
+
+            const dy = (unit.owner === 'player') ? -1 : 1;
+            const targetY = unit.y + dy;
+
+            // 1. 連結ボーナス（味方が真後ろにいれば耐性回復/バフ）
+            const backY = unit.y - dy;
+            const allyBehind = units.find(u => u.x === unit.x && u.y === backY && u.owner === unit.owner && u.hp > 0);
+            if (allyBehind) {
+                // ボーナス：毎ターン耐久力が1回復する（最大値を超えない）
+                if (unit.hp < unit.maxHp) unit.hp += 1;
+            }
+
+            // 盤面外に出ないようにする
+            if (targetY < 0 || targetY >= BOARD_SIZE) return;
+
+            // 2. 移動先との衝突判定
+            const targetUnit = units.find(u => u.x === unit.x && u.y === targetY && u.hp > 0);
+            
+            if (targetUnit) {
+                if (targetUnit.owner !== unit.owner) {
+                    // 敵対峙: 戦闘（お互いに攻撃力を引き合う）
+                    targetUnit.hp -= unit.atk;
+                } else {
+                    // 味方がいる場合は前進ストップ（詰まり）
+                }
+            } else {
+                // 3. 前進
+                unit.y = targetY;
+
+                // 4. 成り（プロモーション）の判定: 敵陣(上3列)に入った歩
+                if (unit.owner === 'player' && unit.type === 'PAWN' && unit.y <= 2) {
+                    unit.type = 'TOKIN';
+                    unit.hp = UNIT_DATA['TOKIN'].hp;
+                    unit.maxHp = UNIT_DATA['TOKIN'].hp;
+                    unit.atk = UNIT_DATA['TOKIN'].atk;
+                }
+            }
+        });
+
+        // HP0以下の駒を削除
+        units = units.filter(u => u.hp > 0);
+    }
+
+    // 画面の描画
+    function renderUnits() {
+        // 古い駒の表示をクリア
+        document.querySelectorAll('.cell').forEach(cell => cell.innerHTML = '');
+
+        units.forEach(unit => {
+            const cell = document.getElementById(`cell-${unit.x}-${unit.y}`);
+            if (cell) {
+                const el = document.createElement('div');
+                el.className = `unit ${unit.owner}`;
+                el.innerHTML = `${UNIT_DATA[unit.type].name}<br><span class="unit-hp">HP:${unit.hp}</span>`;
+                cell.appendChild(el);
+            }
+        });
+    }
+
+    // 勝敗判定
+    function checkWinCondition() {
+        // 敗北条件：プレイヤーの王がいない（かつ、一度は召喚した形跡をターン数などで見るか、今回はシンプルに王のHP0で敗北判定は出撃時のみに行う）
+        // ※プロトタイプでは、敵が最下段に到達したらダメージ等の処理を追加できます。
+
+        // 勝利条件：最上段(y=0)に自分の駒が5体おり、その中に王が含まれる
+        const goalUnits = units.filter(u => u.owner === 'player' && u.y === 0);
+        const hasKing = goalUnits.some(u => u.type === 'KING');
+
+        if (goalUnits.length >= 5 && hasKing) {
+            document.getElementById('message').innerText = "🎉 勝利！王の御成です！ 🎉";
+            document.getElementById('message').style.color = "blue";
+            isGameOver = true;
+        }
+    }
+
+    // UIの更新
+    function updateUI() {
+        document.getElementById('mana-display').innerText = `マナ: ${mana} / ${maxMana}`;
+        document.getElementById('turn-display').innerText = `ターン: ${turn}`;
+        
+        // ボタンの活性/非活性
+        document.getElementById('btn-pawn').disabled = (mana < 1);
+        document.getElementById('btn-king').disabled = (mana < 15);
+    }
+
+    // ゲーム開始
+    initBoard();
+    setInterval(gameLoop, 1000); // 1秒ごとにターンが進行
+
+</script>
+</body>
+</html>

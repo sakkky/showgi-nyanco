@@ -10,51 +10,56 @@
             margin: 0; padding: 0; display: flex; justify-content: center;
         }
         #game-container { 
-            width: 100%; max-width: 500px; /* スマホやPCでも見やすい最大幅 */
+            width: 100%; max-width: 500px;
             background: white; padding: 10px; box-sizing: border-box;
-            display: flex; flex-direction: column; height: 100vh;
+            display: flex; flex-direction: column; min-height: 100vh;
         }
         #header { 
             display: flex; justify-content: space-between; margin-bottom: 5px; 
-            font-weight: bold; font-size: 16px; padding: 0 10px;
+            font-weight: bold; font-size: 16px; padding: 0 5px;
         }
         
-        /* 盤面 (9列 x 10行) */
+        /* 盤面 (9列 x 10行) の修正部分 */
         #board { 
             display: grid; 
-            grid-template-columns: repeat(9, 1fr); 
-            grid-template-rows: repeat(10, 1fr); 
-            aspect-ratio: 9 / 10; /* マス目が正方形になるように維持 */
-            gap: 1px; 
+            grid-template-columns: repeat(9, 1fr); /* 横9マス */
+            width: 100%; /* 横幅を画面いっぱいに */
             background-color: #333; 
             border: 2px solid #333;
-            flex-grow: 0;
+            gap: 1px; /* マス目の隙間（黒い線になる） */
+            margin-bottom: 10px;
         }
-        .cell { background-color: #eecfa1; position: relative; }
-        .cell.goal-line { background-color: #ffd700; opacity: 0.8; } /* 敵陣最奥(y=0) */
-        .cell.enemy-zone { background-color: #ffdab9; } /* 敵陣(y=0~2) */
+        .cell { 
+            background-color: #eecfa1; 
+            aspect-ratio: 1 / 1; /* 高さが潰れないようにマス目を強制的に正方形にする */
+            position: relative; 
+            display: flex; align-items: center; justify-content: center;
+        }
+        .cell.goal-line { background-color: #ffd700; } /* 敵陣最奥(y=0) */
+        .cell.enemy-zone { background-color: #ffdab9; } /* 敵陣(y=1~2) */
         .cell.spawn-zone { background-color: #add8e6; } /* 味方の召喚エリア(y=9) */
 
         /* 駒のデザイン */
         .unit { 
-            width: 100%; height: 100%; 
+            width: 90%; height: 90%; 
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             font-weight: bold; font-size: clamp(10px, 3vw, 14px); color: white;
+            z-index: 10;
         }
         .unit.player { background-color: #4169e1; clip-path: polygon(50% 0%, 100% 20%, 100% 100%, 0 100%, 0 20%); }
         .unit.enemy { background-color: #dc143c; clip-path: polygon(0 0, 100% 0, 100% 80%, 50% 100%, 0 80%); }
-        .unit-hp { font-size: clamp(8px, 2vw, 10px); background: rgba(0,0,0,0.5); padding: 1px 2px; border-radius: 3px;}
+        .unit-hp { font-size: clamp(8px, 2vw, 10px); background: rgba(0,0,0,0.6); padding: 1px 2px; border-radius: 3px;}
 
         /* 操作パネル */
-        #controls { margin-top: auto; display: flex; gap: 10px; justify-content: center; padding: 10px 0;}
+        #controls { display: flex; gap: 10px; justify-content: center; margin-top: 5px;}
         button { 
-            flex: 1; padding: 15px 5px; font-size: 16px; font-weight: bold;
+            flex: 1; padding: 12px 5px; font-size: 16px; font-weight: bold;
             cursor: pointer; border: none; border-radius: 5px; 
             background-color: #4CAF50; color: white; touch-action: manipulation;
         }
         button:disabled { background-color: #aaa; cursor: not-allowed; }
         
-        #message { color: #d9534f; font-weight: bold; height: 24px; font-size: 14px;}
+        #message { color: #d9534f; font-weight: bold; height: 24px; font-size: 14px; margin-bottom: 5px;}
     </style>
 </head>
 <body>
@@ -72,115 +77,3 @@
         <button id="btn-pawn" onclick="selectUnitToSpawn('PAWN', 1)">歩 (コスト1)</button>
         <button id="btn-king" onclick="selectUnitToSpawn('KING', 15)">王 (コスト15)</button>
     </div>
-</div>
-
-<script>
-    // --- ゲーム設定 ---
-    const BOARD_COLS = 9;
-    const BOARD_ROWS = 10; // 0〜8が戦場、9が味方の召喚エリア
-    let turn = 0;
-    let mana = 0;
-    let maxMana = 5;
-    let selectedUnitType = null;
-    let selectedUnitCost = 0;
-    let isGameOver = false;
-
-    let units = [];
-
-    const UNIT_DATA = {
-        'PAWN': { name: '歩', hp: 1, atk: 1 },
-        'TOKIN': { name: 'と', hp: 5, atk: 1 },
-        'KING': { name: '王', hp: 10, atk: 2 }
-    };
-
-    const boardEl = document.getElementById('board');
-
-    // 盤面の初期化
-    function initBoard() {
-        boardEl.innerHTML = '';
-        for (let y = 0; y < BOARD_ROWS; y++) {
-            for (let x = 0; x < BOARD_COLS; x++) {
-                const cell = document.createElement('div');
-                cell.className = 'cell';
-                
-                // 色分け
-                if (y === 0) cell.classList.add('goal-line');
-                else if (y <= 2) cell.classList.add('enemy-zone');
-                else if (y === BOARD_ROWS - 1) cell.classList.add('spawn-zone'); // 一番下は召喚エリア
-                
-                // 召喚エリア(y=9)をクリックした時の処理
-                cell.onclick = () => {
-                    if (selectedUnitType && y === BOARD_ROWS - 1 && mana >= selectedUnitCost) {
-                        if (!units.some(u => u.x === x && u.y === y)) {
-                            spawnUnit('player', selectedUnitType, x, y);
-                            mana -= selectedUnitCost;
-                            selectedUnitType = null;
-                            document.getElementById('message').innerText = "";
-                            updateUI();
-                            renderUnits(); // 置いた瞬間に表示を更新
-                        }
-                    }
-                };
-                cell.id = `cell-${x}-${y}`;
-                boardEl.appendChild(cell);
-            }
-        }
-    }
-
-    function spawnUnit(owner, type, x, y) {
-        units.push({
-            id: Math.random().toString(36).substr(2, 9),
-            owner: owner,
-            type: type,
-            x: x,
-            y: y,
-            hp: UNIT_DATA[type].hp,
-            atk: UNIT_DATA[type].atk,
-            maxHp: UNIT_DATA[type].hp
-        });
-    }
-
-    function selectUnitToSpawn(type, cost) {
-        if (mana >= cost) {
-            selectedUnitType = type;
-            selectedUnitCost = cost;
-            document.getElementById('message').innerText = `${UNIT_DATA[type].name}を水色のエリアに配置してください`;
-        }
-    }
-
-    // --- メインゲームループ ---
-    function gameLoop() {
-        if (isGameOver) return;
-        turn++;
-
-        if (turn % 10 === 0 && maxMana < 20) maxMana += 2;
-        if (mana < maxMana) mana++;
-
-        // 敵の自動召喚 (敵はy=0からスタート)
-        if (turn % 4 === 0) {
-            const rx = Math.floor(Math.random() * BOARD_COLS);
-            if (!units.some(u => u.x === rx && u.y === 0)) {
-                spawnUnit('enemy', 'PAWN', rx, 0);
-            }
-        }
-
-        processUnits();
-        renderUnits();
-        checkWinCondition();
-        updateUI();
-    }
-
-    // 駒の移動と戦闘
-    function processUnits() {
-        let activeUnits = [...units];
-
-        activeUnits.forEach(unit => {
-            if (unit.hp <= 0) return;
-
-            const dy = (unit.owner === 'player') ? -1 : 1;
-            const targetY = unit.y + dy;
-
-            // 連結ボーナス（真後ろに味方がいれば回復）
-            const backY = unit.y - dy;
-            const allyBehind = units.find(u => u.x === unit.x && u.y === backY && u.owner === unit.owner && u.hp > 0);
-            if (allyBehind &&

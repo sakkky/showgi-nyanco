@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>王の御成 - 全駒実装・本格防衛版</title>
+    <title>王の御成 - 角の反射＆勝利演出アップ版</title>
     <style>
         body { 
             font-family: sans-serif; text-align: center; background-color: #f0f0f0; 
@@ -21,7 +21,7 @@
         
         #board-wrapper {
             width: 100%; position: relative;
-            padding-top: 111.11%; /* 10行/9列 */
+            padding-top: 111.11%; 
             margin-bottom: 5px; background-color: #333; border: 2px solid #333; box-sizing: border-box;
         }
         #board { 
@@ -32,9 +32,16 @@
             background-color: #eecfa1; width: 100%; height: 100%;
             position: relative; display: flex; align-items: center; justify-content: center;
         }
-        .cell.enemy-spawn { background-color: #ffb6c1; } /* 敵召喚エリア y=0 */
-        .cell.goal-line { background-color: #ffd700; opacity: 0.6; } /* 味方到達目標 y=1 */
-        .cell.player-spawn { background-color: #add8e6; } /* 味方召喚エリア y=9 */
+        .cell.enemy-spawn { background-color: #ffb6c1; } 
+        .cell.goal-line { background-color: #ffd700; opacity: 0.6; } 
+        .cell.player-spawn { background-color: #add8e6; } 
+
+        /* 勝利時のオーバーレイ表示 */
+        #victory-overlay {
+            display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.85); color: #ffd700; z-index: 100;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
 
         .unit { 
             width: 90%; height: 90%; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -44,7 +51,6 @@
         .unit.enemy { background-color: #dc143c; clip-path: polygon(0 0, 100% 0, 100% 80%, 50% 100%, 0 80%); }
         .unit-hp { font-size: clamp(7px, 2vw, 9px); background: rgba(0,0,0,0.6); padding: 1px 2px; border-radius: 2px; margin-top: 1px;}
 
-        /* 操作パネル (8種類のボタンを並べる) */
         #controls { 
             display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 5px;
         }
@@ -64,12 +70,17 @@
 
 <div id="game-container">
     <div id="header">
-        <span id="mana-display">マナ: 0 / 5</span>
+        <span id="mana-display">マナ: 0 / 10</span>
         <span id="turn-display">ターン: 0</span>
     </div>
 
     <div id="board-wrapper">
         <div id="board"></div>
+        <div id="victory-overlay">
+            <div style="font-size: 28px; font-weight: bold; margin-bottom: 10px;">🎉 王の御成 🎉</div>
+            <div style="font-size: 16px; color: white;">敵陣の制圧に成功しました！</div>
+            <div style="font-size: 12px; color: #ccc; margin-top: 20px;">ページをリロードしてもう一度プレイ</div>
+        </div>
     </div>
 
     <div id="message">水色の「召喚エリア」をタップ！</div>
@@ -91,19 +102,19 @@
     const BOARD_ROWS = 10; 
     let turn = 0;
     let mana = 0;
-    let maxMana = 10; // 最初から少し余裕を持たせる
+    let maxMana = 10; 
     let selectedUnitType = null;
     let isGameOver = false;
     let units = [];
 
-    // 全駒のデータ定義（HP/攻撃力/コスト/最大所持数/移動速度）
+    // BISHOP(角)のspeedを3に修正
     const UNIT_DATA = {
         'PAWN':   { name: '歩', hp: 1, atk: 1, cost: 1, maxCount: 9, speed: 1 },
         'LANCE':  { name: '香', hp: 2, atk: 2, cost: 3, maxCount: 2, speed: 2 },
         'KNIGHT': { name: '桂', hp: 2, atk: 2, cost: 3, maxCount: 2, speed: 1 },
         'SILVER': { name: '銀', hp: 4, atk: 2, cost: 4, maxCount: 2, speed: 1 },
         'GOLD':   { name: '金', hp: 5, atk: 2, cost: 5, maxCount: 2, speed: 1 },
-        'BISHOP': { name: '角', hp: 3, atk: 3, cost: 7, maxCount: 1, speed: 2 },
+        'BISHOP': { name: '角', hp: 3, atk: 3, cost: 7, maxCount: 1, speed: 3 }, 
         'ROOK':   { name: '飛', hp: 4, atk: 3, cost: 8, maxCount: 1, speed: 3 },
         'KING':   { name: '王', hp: 15, atk: 2, cost: 15, maxCount: 1, speed: 1 },
         'TOKIN':  { name: 'と', hp: 5, atk: 1, cost: 0, maxCount: 0, speed: 1 }
@@ -111,9 +122,7 @@
 
     const boardEl = document.getElementById('board');
 
-    // 現在出撃可能な駒の数を計算
     function getAvailableCount(type) {
-        // 歩の場合は「と金」に成っている分もカウントに含める
         const countOnBoard = units.filter(u => u.owner === 'player' && (u.type === type || (type === 'PAWN' && u.type === 'TOKIN'))).length;
         return UNIT_DATA[type].maxCount - countOnBoard;
     }
@@ -125,11 +134,12 @@
                 const cell = document.createElement('div');
                 cell.className = 'cell';
                 
-                if (y === 0) cell.classList.add('enemy-spawn'); // 敵の聖域
-                else if (y === 1) cell.classList.add('goal-line'); // 味方のゴール
-                else if (y === BOARD_ROWS - 1) cell.classList.add('player-spawn'); // 味方の聖域
+                if (y === 0) cell.classList.add('enemy-spawn'); 
+                else if (y === 1) cell.classList.add('goal-line'); 
+                else if (y === BOARD_ROWS - 1) cell.classList.add('player-spawn'); 
                 
                 cell.onclick = () => {
+                    if (isGameOver) return; // 終了後は配置不能に
                     if (selectedUnitType && y === BOARD_ROWS - 1) {
                         const cost = UNIT_DATA[selectedUnitType].cost;
                         if (mana >= cost && getAvailableCount(selectedUnitType) > 0) {
@@ -151,15 +161,22 @@
     }
 
     function spawnUnit(owner, type, x, y) {
+        let dx = 0;
+        // 角(BISHOP)は初期状態で斜めに進む方向を決める
+        if (type === 'BISHOP') {
+            dx = (x > 4) ? -1 : 1; // 右側に置いたら左斜め、左側に置いたら右斜めへ
+        }
+
         units.push({
             id: Math.random().toString(36).substr(2, 9),
-            owner: owner, type: type, x: x, y: y,
+            owner: owner, type: type, x: x, y: y, dx: dx,
             hp: UNIT_DATA[type].hp, atk: UNIT_DATA[type].atk, maxHp: UNIT_DATA[type].hp,
             speed: UNIT_DATA[type].speed
         });
     }
 
     function selectUnit(type) {
+        if (isGameOver) return;
         const cost = UNIT_DATA[type].cost;
         if (mana >= cost && getAvailableCount(type) > 0) {
             selectedUnitType = type;
@@ -171,20 +188,17 @@
         if (isGameOver) return;
         turn++;
 
-        // マナ回復
         if (turn % 10 === 0 && maxMana < 30) maxMana += 2;
         if (mana < maxMana) mana++;
 
-        // 敵AIの強化ロジック
-        let spawnRate = Math.max(1, 4 - Math.floor(turn / 40)); // ターン経過で召喚間隔が短くなる
+        let spawnRate = Math.max(1, 4 - Math.floor(turn / 40)); 
         if (turn % spawnRate === 0) {
             const rx = Math.floor(Math.random() * BOARD_COLS);
             if (!units.some(u => u.x === rx && u.y === 0)) {
-                // ターン数に応じて強い駒を出してくる
                 let availableEnemies = ['PAWN', 'PAWN', 'PAWN'];
-                if (turn > 20) availableEnemies.push('LANCE', 'KNIGHT');
-                if (turn > 40) availableEnemies.push('SILVER', 'GOLD');
-                if (turn > 60) availableEnemies.push('BISHOP', 'ROOK');
+                if (turn > 15) availableEnemies.push('LANCE', 'KNIGHT');
+                if (turn > 30) availableEnemies.push('SILVER', 'GOLD');
+                if (turn > 45) availableEnemies.push('BISHOP', 'ROOK');
 
                 const enemyType = availableEnemies[Math.floor(Math.random() * availableEnemies.length)];
                 spawnUnit('enemy', enemyType, rx, 0);
@@ -198,7 +212,6 @@
     }
 
     function processUnits() {
-        // スピード(移動回数)を考慮するため、まずユニットをコピー
         let activeUnits = [...units];
 
         activeUnits.forEach(unit => {
@@ -206,40 +219,45 @@
 
             const dy = (unit.owner === 'player') ? -1 : 1;
             
-            // 後ろに味方がいれば回復（連結ボーナス）
             const backY = unit.y - dy;
             const allyBehind = units.find(u => u.x === unit.x && u.y === backY && u.owner === unit.owner && u.hp > 0);
             if (allyBehind && unit.hp < unit.maxHp) unit.hp += 1;
 
-            // スピードの数だけ前進・攻撃判定を繰り返す
             for (let step = 0; step < unit.speed; step++) {
-                if (unit.hp <= 0) break; // 戦闘で死んだらストップ
+                if (unit.hp <= 0) break; 
 
-                const targetY = unit.y + dy;
+                let targetX = unit.x + unit.dx; 
+                let targetY = unit.y + dy;
 
-                // 互いの召喚エリアへの侵入禁止
-                if (unit.owner === 'player' && targetY <= 0) break; // y=1でストップ
-                if (unit.owner === 'enemy' && targetY >= BOARD_ROWS - 1) break; // y=8でストップ
+                // 【追加】角の壁反射ロジック
+                if (unit.type === 'BISHOP') {
+                    if (targetX < 0 || targetX >= BOARD_COLS) {
+                        unit.dx *= -1; // 左右を反転
+                        targetX = unit.x + unit.dx; // 反射後の位置を再計算
+                    }
+                }
 
-                const targetUnit = units.find(u => u.x === unit.x && u.y === targetY && u.hp > 0);
+                if (unit.owner === 'player' && targetY <= 0) break; 
+                if (unit.owner === 'enemy' && targetY >= BOARD_ROWS - 1) break; 
+
+                const targetUnit = units.find(u => u.x === targetX && u.y === targetY && u.hp > 0);
                 
                 if (targetUnit) {
                     if (targetUnit.owner !== unit.owner) {
-                        // 敵を攻撃して移動終了
                         targetUnit.hp -= unit.atk;
                     }
-                    break; // 味方がいても敵がいても、ぶつかったらそのターンの移動は終了
+                    break; 
                 } else {
-                    // 前進
+                    unit.x = targetX;
                     unit.y = targetY;
 
-                    // 歩の成り (敵陣 y<=2 に入ったら「と金」になる)
                     if (unit.owner === 'player' && unit.type === 'PAWN' && unit.y <= 2) {
                         unit.type = 'TOKIN';
                         unit.hp = UNIT_DATA['TOKIN'].hp;
                         unit.maxHp = UNIT_DATA['TOKIN'].hp;
                         unit.atk = UNIT_DATA['TOKIN'].atk;
                         unit.speed = UNIT_DATA['TOKIN'].speed;
+                        unit.dx = 0; // 成ったら直進に戻る
                     }
                 }
             }
@@ -262,13 +280,12 @@
     }
 
     function checkWinCondition() {
-        // 勝利判定: y=1 (敵召喚エリアの手前) に王を含む5体の味方がいるか
         const goalUnits = units.filter(u => u.owner === 'player' && u.y === 1);
         const hasKing = goalUnits.some(u => u.type === 'KING');
 
         if (goalUnits.length >= 5 && hasKing) {
-            document.getElementById('message').innerText = "🎉 勝利！王の御成です！ 🎉";
-            document.getElementById('message').style.color = "#00f";
+            // オーバーレイを表示してゲーム停止
+            document.getElementById('victory-overlay').style.display = "flex";
             isGameOver = true;
         }
     }
@@ -277,9 +294,8 @@
         document.getElementById('mana-display').innerText = `マナ: ${mana} / ${maxMana}`;
         document.getElementById('turn-display').innerText = `ターン: ${turn}`;
         
-        // 各ボタンの表示と活性/非活性を更新
         Object.keys(UNIT_DATA).forEach(type => {
-            if (type === 'TOKIN') return; // と金はボタンがないのでスキップ
+            if (type === 'TOKIN') return; 
             const btn = document.getElementById(`btn-${type}`);
             const countDisplay = document.getElementById(`cnt-${type}`);
             const cost = UNIT_DATA[type].cost;
@@ -287,13 +303,14 @@
             
             countDisplay.innerText = `c:${cost} 残:${remain}`;
             
-            // マナ不足、または残り枚数が0ならボタン無効
-            btn.disabled = (mana < cost || remain <= 0);
+            // 終了後、またはマナ不足・残弾ゼロでボタン無効
+            btn.disabled = isGameOver || (mana < cost || remain <= 0);
         });
     }
 
     initBoard();
-    setInterval(gameLoop, 1000);
+    // スピードを「1000」から「1500」にして少しゆっくりにしました！
+    setInterval(gameLoop, 1500);
 
 </script>
 </body>

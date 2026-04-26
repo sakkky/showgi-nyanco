@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>王の御成 - スマホ対応版</title>
+    <title>王の御成 - スマホ完全対応版</title>
     <style>
         body { 
             font-family: sans-serif; text-align: center; background-color: #f0f0f0; 
@@ -19,25 +19,34 @@
             font-weight: bold; font-size: 16px; padding: 0 5px;
         }
         
-        /* 盤面 (9列 x 10行) の修正部分 */
-        #board { 
-            display: grid; 
-            grid-template-columns: repeat(9, 1fr); /* 横9マス */
-            width: 100%; /* 横幅を画面いっぱいに */
-            background-color: #333; 
-            border: 2px solid #333;
-            gap: 1px; /* マス目の隙間（黒い線になる） */
+        /* 盤面が絶対に潰れないための修正部分 */
+        #board-wrapper {
+            width: 100%;
+            position: relative;
+            /* 縦10マス / 横9マス = 1.111... なので 111.11% を指定して高さを強制確保 */
+            padding-top: 111.11%; 
             margin-bottom: 10px;
+            background-color: #333;
+            border: 2px solid #333;
+            box-sizing: border-box;
+        }
+        #board { 
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0; /* ラッパーのサイズにピタッと合わせる */
+            display: grid; 
+            grid-template-columns: repeat(9, 1fr); 
+            grid-template-rows: repeat(10, 1fr); 
+            gap: 1px; 
         }
         .cell { 
             background-color: #eecfa1; 
-            aspect-ratio: 1 / 1; /* 高さが潰れないようにマス目を強制的に正方形にする */
+            width: 100%; height: 100%;
             position: relative; 
             display: flex; align-items: center; justify-content: center;
         }
-        .cell.goal-line { background-color: #ffd700; } /* 敵陣最奥(y=0) */
-        .cell.enemy-zone { background-color: #ffdab9; } /* 敵陣(y=1~2) */
-        .cell.spawn-zone { background-color: #add8e6; } /* 味方の召喚エリア(y=9) */
+        .cell.goal-line { background-color: #ffd700; } 
+        .cell.enemy-zone { background-color: #ffdab9; } 
+        .cell.spawn-zone { background-color: #add8e6; } 
 
         /* 駒のデザイン */
         .unit { 
@@ -70,10 +79,188 @@
         <span id="turn-display">ターン: 0</span>
     </div>
 
-    <div id="board"></div>
+    <div id="board-wrapper">
+        <div id="board"></div>
+    </div>
 
     <div id="message">水色の「召喚エリア」をタップして配置！</div>
     <div id="controls">
         <button id="btn-pawn" onclick="selectUnitToSpawn('PAWN', 1)">歩 (コスト1)</button>
         <button id="btn-king" onclick="selectUnitToSpawn('KING', 15)">王 (コスト15)</button>
     </div>
+</div>
+
+<script>
+    const BOARD_COLS = 9;
+    const BOARD_ROWS = 10; 
+    let turn = 0;
+    let mana = 0;
+    let maxMana = 5;
+    let selectedUnitType = null;
+    let selectedUnitCost = 0;
+    let isGameOver = false;
+    let units = [];
+
+    const UNIT_DATA = {
+        'PAWN': { name: '歩', hp: 1, atk: 1 },
+        'TOKIN': { name: 'と', hp: 5, atk: 1 },
+        'KING': { name: '王', hp: 10, atk: 2 }
+    };
+
+    const boardEl = document.getElementById('board');
+
+    function initBoard() {
+        boardEl.innerHTML = '';
+        for (let y = 0; y < BOARD_ROWS; y++) {
+            for (let x = 0; x < BOARD_COLS; x++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                
+                if (y === 0) cell.classList.add('goal-line');
+                else if (y <= 2) cell.classList.add('enemy-zone');
+                else if (y === BOARD_ROWS - 1) cell.classList.add('spawn-zone');
+                
+                cell.onclick = () => {
+                    if (selectedUnitType && y === BOARD_ROWS - 1 && mana >= selectedUnitCost) {
+                        if (!units.some(u => u.x === x && u.y === y)) {
+                            spawnUnit('player', selectedUnitType, x, y);
+                            mana -= selectedUnitCost;
+                            selectedUnitType = null;
+                            document.getElementById('message').innerText = "";
+                            updateUI();
+                            renderUnits(); 
+                        }
+                    }
+                };
+                cell.id = `cell-${x}-${y}`;
+                boardEl.appendChild(cell);
+            }
+        }
+    }
+
+    function spawnUnit(owner, type, x, y) {
+        units.push({
+            id: Math.random().toString(36).substr(2, 9),
+            owner: owner,
+            type: type,
+            x: x,
+            y: y,
+            hp: UNIT_DATA[type].hp,
+            atk: UNIT_DATA[type].atk,
+            maxHp: UNIT_DATA[type].hp
+        });
+    }
+
+    function selectUnitToSpawn(type, cost) {
+        if (mana >= cost) {
+            selectedUnitType = type;
+            selectedUnitCost = cost;
+            document.getElementById('message').innerText = `${UNIT_DATA[type].name}を水色のエリアに配置してください`;
+        }
+    }
+
+    function gameLoop() {
+        if (isGameOver) return;
+        turn++;
+
+        if (turn % 10 === 0 && maxMana < 20) maxMana += 2;
+        if (mana < maxMana) mana++;
+
+        if (turn % 4 === 0) {
+            const rx = Math.floor(Math.random() * BOARD_COLS);
+            if (!units.some(u => u.x === rx && u.y === 0)) {
+                spawnUnit('enemy', 'PAWN', rx, 0);
+            }
+        }
+
+        processUnits();
+        renderUnits();
+        checkWinCondition();
+        updateUI();
+    }
+
+    function processUnits() {
+        let activeUnits = [...units];
+
+        activeUnits.forEach(unit => {
+            if (unit.hp <= 0) return;
+
+            const dy = (unit.owner === 'player') ? -1 : 1;
+            const targetY = unit.y + dy;
+
+            const backY = unit.y - dy;
+            const allyBehind = units.find(u => u.x === unit.x && u.y === backY && u.owner === unit.owner && u.hp > 0);
+            if (allyBehind && unit.hp < unit.maxHp) {
+                unit.hp += 1;
+            }
+
+            if (unit.owner === 'player' && targetY < 0) return;
+            if (unit.owner === 'enemy' && targetY >= BOARD_ROWS - 1) return;
+
+            const targetUnit = units.find(u => u.x === unit.x && u.y === targetY && u.hp > 0);
+            
+            if (targetUnit) {
+                if (targetUnit.owner !== unit.owner) {
+                    targetUnit.hp -= unit.atk;
+                }
+            } else {
+                unit.y = targetY;
+
+                if (unit.owner === 'player' && unit.type === 'PAWN' && unit.y <= 2) {
+                    unit.type = 'TOKIN';
+                    unit.hp = UNIT_DATA['TOKIN'].hp;
+                    unit.maxHp = UNIT_DATA['TOKIN'].hp;
+                    unit.atk = UNIT_DATA['TOKIN'].atk;
+                }
+            }
+        });
+
+        units = units.filter(u => u.hp > 0);
+    }
+
+    function renderUnits() {
+        document.querySelectorAll('.cell').forEach(cell => cell.innerHTML = '');
+        units.forEach(unit => {
+            const cell = document.getElementById(`cell-${unit.x}-${unit.y}`);
+            if (cell) {
+                const el = document.createElement('div');
+                el.className = `unit ${unit.owner}`;
+                el.innerHTML = `${UNIT_DATA[unit.type].name}<br><span class="unit-hp">HP:${unit.hp}</span>`;
+                cell.appendChild(el);
+            }
+        });
+    }
+
+    function checkWinCondition() {
+        const goalUnits = units.filter(u => u.owner === 'player' && u.y === 0);
+        const hasKing = goalUnits.some(u => u.type === 'KING');
+
+        if (goalUnits.length >= 5 && hasKing) {
+            document.getElementById('message').innerText = "🎉 勝利！王の御成です！ 🎉";
+            document.getElementById('message').style.color = "#00f";
+            isGameOver = true;
+        }
+    }
+
+    function updateUI() {
+        document.getElementById('mana-display').innerText = `マナ: ${mana} / ${maxMana}`;
+        document.getElementById('turn-display').innerText = `ターン: ${turn}`;
+        
+        const hasKing = units.some(u => u.type === 'KING' && u.owner === 'player');
+
+        document.getElementById('btn-pawn').disabled = (mana < 1);
+        document.getElementById('btn-king').disabled = (mana < 15 || hasKing);
+        
+        if (hasKing) {
+            document.getElementById('btn-king').innerText = "王 (出撃中)";
+        } else {
+            document.getElementById('btn-king').innerText = "王 (コスト15)";
+        }
+    }
+
+    initBoard();
+    setInterval(gameLoop, 1000);
+
+</script>
+</body>
+</html>

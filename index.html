@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>王の御成 - 角の反射＆勝利演出アップ版</title>
+    <title>王の御成 - 桂馬ジャンプ＆敵王出撃版</title>
     <style>
         body { 
             font-family: sans-serif; text-align: center; background-color: #f0f0f0; 
@@ -32,11 +32,10 @@
             background-color: #eecfa1; width: 100%; height: 100%;
             position: relative; display: flex; align-items: center; justify-content: center;
         }
-        .cell.enemy-spawn { background-color: #ffb6c1; } 
-        .cell.goal-line { background-color: #ffd700; opacity: 0.6; } 
-        .cell.player-spawn { background-color: #add8e6; } 
+        .cell.enemy-spawn { background-color: #ffb6c1; } /* 敵の聖域 y=0 */
+        .cell.goal-line { background-color: #ffd700; opacity: 0.6; } /* 到達目標ライン (敵陣最前線y=1, 自陣最前線y=8) */
+        .cell.player-spawn { background-color: #add8e6; } /* 味方の聖域 y=9 */
 
-        /* 勝利時のオーバーレイ表示 */
         #victory-overlay {
             display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.85); color: #ffd700; z-index: 100;
@@ -107,10 +106,10 @@
     let isGameOver = false;
     let units = [];
 
-    // BISHOP(角)のspeedを3に修正
     const UNIT_DATA = {
         'PAWN':   { name: '歩', hp: 1, atk: 1, cost: 1, maxCount: 9, speed: 1 },
         'LANCE':  { name: '香', hp: 2, atk: 2, cost: 3, maxCount: 2, speed: 2 },
+        // 桂馬のspeedはジャンプ回数と解釈し1とする
         'KNIGHT': { name: '桂', hp: 2, atk: 2, cost: 3, maxCount: 2, speed: 1 },
         'SILVER': { name: '銀', hp: 4, atk: 2, cost: 4, maxCount: 2, speed: 1 },
         'GOLD':   { name: '金', hp: 5, atk: 2, cost: 5, maxCount: 2, speed: 1 },
@@ -135,11 +134,12 @@
                 cell.className = 'cell';
                 
                 if (y === 0) cell.classList.add('enemy-spawn'); 
-                else if (y === 1) cell.classList.add('goal-line'); 
+                else if (y === 1) cell.classList.add('goal-line'); // 到達目標 (味方)
+                else if (y === 8) cell.classList.add('goal-line'); // 到達目標 (敵・黄色く強調)
                 else if (y === BOARD_ROWS - 1) cell.classList.add('player-spawn'); 
                 
                 cell.onclick = () => {
-                    if (isGameOver) return; // 終了後は配置不能に
+                    if (isGameOver) return;
                     if (selectedUnitType && y === BOARD_ROWS - 1) {
                         const cost = UNIT_DATA[selectedUnitType].cost;
                         if (mana >= cost && getAvailableCount(selectedUnitType) > 0) {
@@ -162,8 +162,8 @@
 
     function spawnUnit(owner, type, x, y) {
         let dx = 0;
-        // 角(BISHOP)は初期状態で斜めに進む方向を決める
-        if (type === 'BISHOP') {
+        // 角(BISHOP)と桂馬(KNIGHT)は初期状態で斜めに進む方向を決める
+        if (type === 'BISHOP' || type === 'KNIGHT') {
             dx = (x > 4) ? -1 : 1; // 右側に置いたら左斜め、左側に置いたら右斜めへ
         }
 
@@ -199,8 +199,21 @@
                 if (turn > 15) availableEnemies.push('LANCE', 'KNIGHT');
                 if (turn > 30) availableEnemies.push('SILVER', 'GOLD');
                 if (turn > 45) availableEnemies.push('BISHOP', 'ROOK');
+                
+                // 【修正】十分なターンが経過したら敵も王将を召喚リストに追加
+                if (turn > 60) availableEnemies.push('KING');
 
-                const enemyType = availableEnemies[Math.floor(Math.random() * availableEnemies.length)];
+                // 敵が王将を召喚する際は、既に敵の王将がいないかチェック
+                let enemyType = availableEnemies[Math.floor(Math.random() * availableEnemies.length)];
+                
+                if (enemyType === 'KING') {
+                    const hasEnemyKing = units.some(u => u.type === 'KING' && u.owner === 'enemy');
+                    if (hasEnemyKing) {
+                        // 既に敵の王将がいる場合は、代わりに歩を召喚
+                        enemyType = 'PAWN';
+                    }
+                }
+
                 spawnUnit('enemy', enemyType, rx, 0);
             }
         }
@@ -223,13 +236,48 @@
             const allyBehind = units.find(u => u.x === unit.x && u.y === backY && u.owner === unit.owner && u.hp > 0);
             if (allyBehind && unit.hp < unit.maxHp) unit.hp += 1;
 
+            // スピードの数だけ移動判定を繰り返す
             for (let step = 0; step < unit.speed; step++) {
                 if (unit.hp <= 0) break; 
 
                 let targetX = unit.x + unit.dx; 
                 let targetY = unit.y + dy;
 
-                // 【追加】角の壁反射ロジック
+                // 【修正】桂馬のジャンプ移動ロジック
+                if (unit.type === 'KNIGHT') {
+                    // ルート上の駒を無視するジャンプ。飛び越えるセルの衝突判定をスキップし、2歩先のセルへ。
+                    targetY = unit.y + dy * 2; // 2歩前
+                    // dxは召喚時に決めた左右どちらか。
+
+                    // 互いの召喚エリアへの侵入禁止 (ジャンプ移動でも適用)
+                    if (unit.owner === 'player' && targetY <= 0) break; // y=1でストップ
+                    if (unit.owner === 'enemy' && targetY >= BOARD_ROWS - 1) break; // y=8でストップ
+
+                    // サイド壁反射判定 (x座標)
+                    if (targetX < 0 || targetX >= BOARD_COLS) {
+                        unit.dx *= -1; // 左右を反転
+                        targetX = unit.x + unit.dx; // 反射後の位置を再計算
+                    }
+
+                    // ジャンプ着地地点の盤面内判定 (y座標は既にチェック、x座標は反射で盤面内へ)
+                    if (targetY < 0 || targetY >= BOARD_ROWS) break;
+
+                    const targetUnit = units.find(u => u.x === targetX && u.y === targetY && u.hp > 0);
+                    
+                    if (targetUnit) {
+                        if (targetUnit.owner !== unit.owner) {
+                            targetUnit.hp -= unit.atk; // 敵なら戦闘
+                        }
+                        break; // 味方でも敵でも、ぶつかったらそのターンの移動は終了
+                    } else {
+                        // ジャンプ移動
+                        unit.x = targetX;
+                        unit.y = targetY;
+                        break; // 桂馬は1ターンの移動アクションを1回のジャンプとする
+                    }
+                }
+
+                // 【修正】角の壁反射ロジック (dxがある駒、現在は角のみ)
                 if (unit.type === 'BISHOP') {
                     if (targetX < 0 || targetX >= BOARD_COLS) {
                         unit.dx *= -1; // 左右を反転
@@ -237,6 +285,7 @@
                     }
                 }
 
+                // 通常の移動・衝突判定
                 if (unit.owner === 'player' && targetY <= 0) break; 
                 if (unit.owner === 'enemy' && targetY >= BOARD_ROWS - 1) break; 
 
@@ -248,9 +297,11 @@
                     }
                     break; 
                 } else {
+                    // 通常移動
                     unit.x = targetX;
                     unit.y = targetY;
 
+                    // 歩の成り (敵陣 y<=2 に入ったら「と金」になる)
                     if (unit.owner === 'player' && unit.type === 'PAWN' && unit.y <= 2) {
                         unit.type = 'TOKIN';
                         unit.hp = UNIT_DATA['TOKIN'].hp;
@@ -280,6 +331,7 @@
     }
 
     function checkWinCondition() {
+        // 勝利判定: y=1 (敵召喚エリアの手前) に王を含む5体の味方がいるか
         const goalUnits = units.filter(u => u.owner === 'player' && u.y === 1);
         const hasKing = goalUnits.some(u => u.type === 'KING');
 
@@ -294,6 +346,8 @@
         document.getElementById('mana-display').innerText = `マナ: ${mana} / ${maxMana}`;
         document.getElementById('turn-display').innerText = `ターン: ${turn}`;
         
+        const hasKing = units.some(u => u.type === 'KING' && u.owner === 'player');
+
         Object.keys(UNIT_DATA).forEach(type => {
             if (type === 'TOKIN') return; 
             const btn = document.getElementById(`btn-${type}`);
@@ -309,7 +363,6 @@
     }
 
     initBoard();
-    // スピードを「1000」から「1500」にして少しゆっくりにしました！
     setInterval(gameLoop, 1500);
 
 </script>
